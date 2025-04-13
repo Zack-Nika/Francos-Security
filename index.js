@@ -1,16 +1,24 @@
 /******************************************************************************
- FRANCO’S SECURITY 🔱 – SINGLE-FILE FINAL CODE
- Includes all major features:
- 1) Approval system (DM you when joining new servers, Approve/Reject)
+ FRANCO’S SECURITY 🔱 – SINGLE-FILE ULTIMATE VERSION
+ No references to separate handlers, everything is here.
+
+ Features:
+ 1) Approval system (DM you on join, Approve/Reject)
  2) Whitelist commands (/whitelist, /unwhitelist)
  3) Backup & Restore (/backupnow, /restore)
- 4) Anti-Nuke (detect channel deletes, restore, ban attacker)
- 5) Trust system + Quarantine for new or suspicious users
- 6) Selfbot detection (spam messages, reactions, VC)
- 7) /defcon command (low, med, high)
- 8) /nukeattempts (log blocked attacks)
- 9) Role tampering checks (if Franco’s admin removed)
- 10) Everything stored in JSON in a /data folder
+ 4) Channel/Role Deletion Anti-Nuke
+ 5) Trust + Quarantine for suspicious users
+ 6) Selfbot detection (spam messages, reactions, VC joins)
+ 7) Defcon system (/defcon)
+ 8) /nukeattempts logs
+ 9) Role tampering checks (if Franco’s admin is removed)
+ 10) JSON data stored in /data
+
+ Just do:
+  - Put in `index.js`
+  - Create `.env` with `TOKEN`, `OWNER_ID`, `CLIENT_ID` (optional)
+  - `npm install`
+  - `npm start`
 *******************************************************************************/
 
 import {
@@ -22,7 +30,6 @@ import {
   REST,
   Routes
 } from 'discord.js';
-
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
@@ -30,50 +37,47 @@ import { fileURLToPath } from 'url';
 
 dotenv.config();
 
-// ---- BOT CONFIG ----
+// BOT CONFIG
 const TOKEN = process.env.TOKEN;
-const OWNER_ID = process.env.OWNER_ID || '849430458131677195';  // Fallback if not set in .env
-const BOT_ID = process.env.CLIENT_ID || ''; // If you want auto slash command registration
+const OWNER_ID = process.env.OWNER_ID || '849430458131677195';
+const BOT_ID = process.env.CLIENT_ID || ''; // if you want auto slash registration
 
-// ---- FILE / FOLDER SETUP ----
+// FILE PATHS
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-// Approved servers
 const APPROVED_FILE = path.join(DATA_DIR, 'approvedGuilds.json');
 if (!fs.existsSync(APPROVED_FILE)) fs.writeFileSync(APPROVED_FILE, '[]');
 
-// Whitelist data
 const WHITELIST_FILE = path.join(DATA_DIR, 'whitelist.json');
 if (!fs.existsSync(WHITELIST_FILE)) fs.writeFileSync(WHITELIST_FILE, '{}');
 
-// Trust data
 const TRUST_FILE = path.join(DATA_DIR, 'trust.json');
 if (!fs.existsSync(TRUST_FILE)) fs.writeFileSync(TRUST_FILE, '{}');
 
-// Nuke attempts
 const NUKE_FILE = path.join(DATA_DIR, 'nukeAttempts.json');
 if (!fs.existsSync(NUKE_FILE)) fs.writeFileSync(NUKE_FILE, '{}');
 
-// Backups folder
 const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR);
 
-// Load data
-let approvedGuilds = JSON.parse(fs.readFileSync(APPROVED_FILE, 'utf-8')); // array
-let globalWhitelist = JSON.parse(fs.readFileSync(WHITELIST_FILE, 'utf-8')); // {guildId: [userId,...]}
-let trustData = JSON.parse(fs.readFileSync(TRUST_FILE, 'utf-8')); // {guildId: {userId:{trust,quarantined}}}
-let nukeLogs = JSON.parse(fs.readFileSync(NUKE_FILE, 'utf-8'));   // {guildId: [ {type, attacker, time}, ... ]}
+// LOAD DATA
+let approvedGuilds = JSON.parse(fs.readFileSync(APPROVED_FILE, 'utf-8'));  // array
+let globalWhitelist = JSON.parse(fs.readFileSync(WHITELIST_FILE, 'utf-8')); // { guildId: [ userId, ... ] }
+let trustData = JSON.parse(fs.readFileSync(TRUST_FILE, 'utf-8'));          // { guildId: { userId: { trust, quarantined } } }
+let nukeLogs = JSON.parse(fs.readFileSync(NUKE_FILE, 'utf-8'));           // { guildId: [ { type, attacker, time }, ... ] }
 
-// Helper: Save JSON
+// HELPER: Save JSON
 function saveJSON(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-// Check if guild is approved
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   APPROVAL SYSTEM
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 function isGuildApproved(gid) {
   return approvedGuilds.includes(gid);
 }
@@ -87,7 +91,9 @@ function rejectGuild(guild) {
   guild.leave();
 }
 
-// Whitelist
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   WHITELIST
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 function getGuildWhitelist(gid) {
   if (!globalWhitelist[gid]) globalWhitelist[gid] = [];
   return globalWhitelist[gid];
@@ -107,7 +113,9 @@ function removeFromWhitelist(gid, uid) {
   saveJSON(WHITELIST_FILE, globalWhitelist);
 }
 
-// Trust system
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   TRUST + QUARANTINE
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 function getTrustObj(gid, uid) {
   if (!trustData[gid]) trustData[gid] = {};
   if (!trustData[gid][uid]) {
@@ -137,7 +145,7 @@ async function quarantineCheck(member) {
     saveTrust();
     await applyQuarantine(member);
 
-    // auto remove after 20 mins if trust >=40
+    // auto remove after 20 mins if trust >= 40
     setTimeout(async () => {
       const updated = getTrustObj(member.guild.id, member.id);
       if (updated.trust >= 40) {
@@ -172,7 +180,9 @@ async function removeQuarantine(member) {
   }
 }
 
-// Nuke attempts
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   NUKE ATTEMPTS LOG
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 function logNukeAttempt(gid, type, attackerId) {
   if (!nukeLogs[gid]) nukeLogs[gid] = [];
   nukeLogs[gid].push({ type, attacker: attackerId, time: new Date().toLocaleString() });
@@ -182,10 +192,11 @@ function getNukeAttempts(gid) {
   return nukeLogs[gid] || [];
 }
 
-// Backup & Restore
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   BACKUP & RESTORE
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 function backupGuild(guild) {
   const data = { channels: [], roles: [] };
-
   guild.channels.cache.forEach(ch => {
     data.channels.push({
       id: ch.id,
@@ -206,7 +217,6 @@ function backupGuild(guild) {
       });
     }
   });
-
   fs.writeFileSync(path.join(BACKUPS_DIR, `${guild.id}.json`), JSON.stringify(data, null, 2));
 }
 async function restoreGuild(guild) {
@@ -214,7 +224,7 @@ async function restoreGuild(guild) {
   if (!fs.existsSync(fPath)) return false;
   const backup = JSON.parse(fs.readFileSync(fPath, 'utf-8'));
 
-  // minimal restore for missing channels
+  // minimal channel restore
   const existing = guild.channels.cache.map(c => c.id);
   for (const ch of backup.channels) {
     if (!existing.includes(ch.id)) {
@@ -229,8 +239,10 @@ async function restoreGuild(guild) {
   return true;
 }
 
-// Spam detection
-const spamMap = new Map(); // key= "guildId-userId"
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   SPAM / SELF-BOT DETECTION
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
+const spamMap = new Map();
 function checkSpam(member, type) {
   if (
     isWhitelisted(member.guild.id, member.id) ||
@@ -272,14 +284,15 @@ async function punish(member, reason) {
   }
 }
 
-// Role tampering
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   ROLE TAMPERING (If Franco loses admin)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 async function checkFrancoRoleTampering(oldGuild, newGuild) {
   const me = await newGuild.members.fetchMe().catch(() => null);
   if (!me) return;
   if (!me.permissions.has(PermissionsBitField.Flags.Administrator)) {
-    // admin removed from Franco
     try {
-      const logs = await newGuild.fetchAuditLogs({ limit: 1, type: 31 });
+      const logs = await newGuild.fetchAuditLogs({ limit: 1, type: 31 }); // roleUpdate
       const entry = logs.entries.first();
       if (entry) {
         const attackerId = entry.executor.id;
@@ -294,7 +307,9 @@ async function checkFrancoRoleTampering(oldGuild, newGuild) {
   }
 }
 
-// On guild join => DM YOU for approve
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   JOIN APPROVAL (DM YOU)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 async function handleGuildJoin(guild, client) {
   try {
     const you = await client.users.fetch(OWNER_ID);
@@ -316,8 +331,7 @@ async function handleGuildJoin(guild, client) {
     console.log('handleGuildJoin error:', err);
   }
 }
-
-async function handleApproveRejectButton(interaction) {
+async function handleApproveReject(interaction) {
   if (interaction.customId !== 'approve_guild' && interaction.customId !== 'reject_guild') return;
   const embed = interaction.message.embeds[0];
   if (!embed) return interaction.reply({ content: 'No embed found.', ephemeral: true });
@@ -341,7 +355,9 @@ async function handleApproveRejectButton(interaction) {
   }
 }
 
-// Slash commands
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   SLASH COMMANDS
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 const slashCommands = [
   {
     name: 'whitelist',
@@ -359,7 +375,7 @@ const slashCommands = [
     name: 'unwhitelist',
     description: 'Remove a user from the whitelist.',
     options: [
-      { name: 'user', type: 6, description: 'User to unwhitelist', required: true }
+      { name: 'user', type: 6, description: 'User to remove', required: true }
     ],
     run: async (interaction) => {
       const user = interaction.options.getUser('user');
@@ -372,7 +388,7 @@ const slashCommands = [
     description: 'Backup the server now.',
     run: async (interaction) => {
       backupGuild(interaction.guild);
-      await interaction.reply({ content: '✅ Backup completed.', ephemeral: true });
+      await interaction.reply({ content: '✅ Backup done.', ephemeral: true });
     }
   },
   {
@@ -382,7 +398,7 @@ const slashCommands = [
       await interaction.deferReply({ ephemeral: true });
       const ok = await restoreGuild(interaction.guild);
       if (ok) {
-        await interaction.followUp({ content: '✅ Server restore done.', ephemeral: true });
+        await interaction.followUp({ content: '✅ Server restored.', ephemeral: true });
       } else {
         await interaction.followUp({ content: '❌ No backup found.', ephemeral: true });
       }
@@ -390,7 +406,7 @@ const slashCommands = [
   },
   {
     name: 'trustscore',
-    description: 'Check user’s trust.',
+    description: 'Check a user’s trust',
     options: [
       { name: 'user', type: 6, description: 'User to check', required: true }
     ],
@@ -409,7 +425,7 @@ const slashCommands = [
     run: async (interaction) => {
       const logs = getNukeAttempts(interaction.guild.id);
       if (!logs.length) {
-        return interaction.reply({ content: 'No nuke attempts yet.', ephemeral: true });
+        return interaction.reply({ content: 'No nuke attempts found.', ephemeral: true });
       }
       let msg = `**Nuke Attempts Blocked**: ${logs.length}\n`;
       logs.forEach((item, i) => {
@@ -437,17 +453,17 @@ const slashCommands = [
     run: async (interaction) => {
       const level = interaction.options.getString('level');
       if (level === 'low') {
-        await interaction.reply({ content: 'Defcon set to LOW: normal ops.', ephemeral: true });
+        await interaction.reply({ content: 'Defcon = LOW: normal ops.', ephemeral: true });
       } else if (level === 'med') {
-        await interaction.reply({ content: 'Defcon set to MED: restricting new invites.', ephemeral: true });
+        await interaction.reply({ content: 'Defcon = MED: restricting invites.', ephemeral: true });
       } else {
-        await interaction.reply({ content: 'Defcon set to HIGH: locking channels for non-whitelisted.', ephemeral: true });
+        await interaction.reply({ content: 'Defcon = HIGH: channels locked for non-whitelist.', ephemeral: true });
       }
     }
   }
 ];
 
-// Discord client
+// DISCORD CLIENT
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -460,63 +476,60 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember]
 });
 
-// Register slash commands (optional)
-async function registerCommands() {
+// Optional slash commands registration
+async function registerSlashCommands() {
   if (!BOT_ID) {
-    console.log('No CLIENT_ID given. Skipping auto slash registration.');
+    console.log('No CLIENT_ID set, skipping slash auto-registration.');
     return;
   }
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   try {
     console.log('Registering slash commands globally...');
-    await rest.put(
-      Routes.applicationCommands(BOT_ID),
-      {
-        body: slashCommands.map(c => ({
-          name: c.name,
-          description: c.description,
-          options: c.options || []
-        }))
-      }
-    );
+    await rest.put(Routes.applicationCommands(BOT_ID), {
+      body: slashCommands.map(cmd => ({
+        name: cmd.name,
+        description: cmd.description,
+        options: cmd.options || []
+      }))
+    });
     console.log('✅ Slash commands registered globally.');
   } catch (err) {
-    console.error('Failed to register slash commands:', err);
+    console.error('Failed slash registration:', err);
   }
 }
 
 // On ready
 client.once(Events.ClientReady, async () => {
   console.log(`🔱 Franco's Security is online as ${client.user.tag}`);
-  // If you want auto global slash registration, uncomment:
-  // await registerCommands();
+  // If you want auto registration, uncomment:
+  // await registerSlashCommands();
 });
 
-// On guild join => approval
+// When bot joins a new server => ask for your approval
 client.on(Events.GuildCreate, guild => {
   handleGuildJoin(guild, client);
 });
 
-// On interaction => slash or button
+// On slash or button
 client.on(Events.InteractionCreate, async interaction => {
   if (interaction.isChatInputCommand()) {
     if (!interaction.guild || !isGuildApproved(interaction.guild.id)) {
-      return interaction.reply({ content: '❌ Server not approved by Franco.', ephemeral: true });
+      return interaction.reply({ content: '❌ This server is not approved by Franco.', ephemeral: true });
     }
     const cmd = slashCommands.find(c => c.name === interaction.commandName);
     if (!cmd) return;
     try {
       await cmd.run(interaction);
     } catch (err) {
-      console.error('Slash command error:', err);
+      console.error('Command error:', err);
       await interaction.reply({ content: 'Error running command.', ephemeral: true });
     }
   } else if (interaction.isButton()) {
-    await handleApproveRejectButton(interaction);
+    await handleApproveReject(interaction);
   }
 });
 
-// On member add => quarantine
+// On member join => quarantine
 client.on(Events.GuildMemberAdd, member => {
   if (isGuildApproved(member.guild.id)) {
     getTrustObj(member.guild.id, member.id);
@@ -528,7 +541,7 @@ client.on(Events.GuildMemberAdd, member => {
 client.on(Events.ChannelDelete, async channel => {
   if (!isGuildApproved(channel.guild.id)) return;
   try {
-    const logs = await channel.guild.fetchAuditLogs({ limit: 1, type: 12 }); // channel delete
+    const logs = await channel.guild.fetchAuditLogs({ limit: 1, type: 12 });
     const entry = logs.entries.first();
     if (!entry) return;
     const executor = entry.executor;
@@ -568,11 +581,11 @@ client.on(Events.MessageCreate, async message => {
     return;
   }
   // trust +1 if not quarantined
-  const data = getTrustObj(message.guild.id, member.id);
-  if (!data.quarantined) adjustTrust(message.guild.id, member.id, +1);
+  const tObj = getTrustObj(message.guild.id, member.id);
+  if (!tObj.quarantined) adjustTrust(message.guild.id, member.id, +1);
 
   // if quarantined => remove msg
-  if (data.quarantined) {
+  if (tObj.quarantined) {
     message.delete().catch(() => null);
   }
 });
@@ -585,7 +598,6 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 
   const member = await reaction.message.guild.members.fetch(user.id).catch(() => null);
   if (!member) return;
-
   if (checkSpam(member, 'reaction')) {
     await punish(member, 'Reaction spam / selfbot?');
   } else {
@@ -605,13 +617,21 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     if (checkSpam(member, 'vcJoin')) {
       punish(member, 'VC join/leave spam');
     } else {
-      const data = getTrustObj(member.guild.id, member.id);
-      if (!data.quarantined) adjustTrust(member.guild.id, member.id, +1);
+      const d = getTrustObj(member.guild.id, member.id);
+      if (!d.quarantined) adjustTrust(member.guild.id, member.id, +1);
     }
   }
 });
 
-// Login
-client.login(TOKEN).then(() => {
-  console.log('⚔️ Franco is logging in...');
-}).catch(err => console.error('Login error:', err));
+// LOGIN
+const clientReady = async () => {
+  console.log(`🔱 Franco's Security is online as ${client.user.tag}`);
+  // If you want to auto-register slash commands, do:
+  // await registerCommands();
+};
+
+client.once(Events.ClientReady, clientReady);
+
+client.login(TOKEN)
+  .then(() => console.log('⚔️ Franco is logging in...'))
+  .catch(err => console.error('Login error:', err));
