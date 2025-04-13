@@ -2,7 +2,11 @@
   "name": "franco-security",
   "version": "1.0.0",
   "type": "module",
-  "scripts": { "start": "node index.js" },
+  "description": "Franco's single-file security bot.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "discord.js": "^14.13.0",
     "dotenv": "^16.3.1"
