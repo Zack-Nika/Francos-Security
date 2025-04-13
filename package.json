@@ -1,6 +1,7 @@
 {
   "name": "franco-security-bot",
   "version": "1.0.0",
+  "type": "module",
   "description": "Franco's Security 🔱 - The top-tier Discord security bot",
   "main": "index.js",
   "scripts": {
