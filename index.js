@@ -1,10 +1,11 @@
-/*****************************************************************************
- FRANCO’S SECURITY 🔱 – SINGLE-FILE FINAL CODE
+/******************************************************************************
+ FRANCO’S SECURITY 🔱 – SINGLE-FILE 
  + suspicious-actions logs
  + ephemeral fix
  + ghost franco invite
  + double slash registration (global + test guild) if uncommented
- + auto-whitelist "Franco’s Armada" + "Ghost Franco"
+ + auto-whitelist Franco's bots
+ + auto-delete approval DM after 1s
 *******************************************************************************/
 
 import {
@@ -35,13 +36,12 @@ const BOT_ID = process.env.CLIENT_ID || ''; // your main Franco Security app ID
 const TEST_GUILD_ID = process.env.TEST_GUILD_ID || 'YOUR_TEST_GUILD_ID_HERE';
 
 /*
-  Hardcoding Ghost Franco + Franco's Armada invite, etc.
-  Or just the Ghost Franco invite link:
+  Hardcoding Ghost Franco invite link (ID=1360742224199159829)
 */
 const GHOST_FRANCO_INVITE = `https://discord.com/oauth2/authorize?client_id=1360742224199159829&permissions=8&scope=bot`;
 
 /* 
-  Auto-Whitelist these bot IDs (Franco’s Armada + Ghost Franco)
+  Auto-Whitelist these Franco bot IDs (Ghost Franco + Franco’s Armada)
 */
 const FRANCO_BOTS = [
   '1360742224199159829', // Ghost Franco
@@ -90,7 +90,7 @@ async function logSuspiciousAction(guild, content) {
   if (!guild) return;
   const channelName = 'suspicious-actions';
   let logChannel = guild.channels.cache.find(c => c.name === channelName);
-  if (!logChannel) return; // if channel doesn't exist
+  if (!logChannel) return;
   if (!logChannel.isTextBased()) return;
   await logChannel.send(content).catch(() => null);
 }
@@ -154,8 +154,6 @@ function adjustTrust(gid, uid, diff) {
   saveTrust();
   return obj.trust;
 }
-
-/* Quarantine if trust <30 or new account, etc. */
 
 /* --------------------------------------------------------------------------
    NUKE ATTEMPTS
@@ -248,6 +246,7 @@ function checkSpam(member, type) {
   spamMap.set(key, data);
   return false;
 }
+
 async function punish(member, reason) {
   if (member.bannable) {
     await member.ban({ reason }).catch(() => null);
@@ -277,7 +276,7 @@ async function checkFrancoRoleTampering(oldGuild, newGuild) {
           const attacker = await newGuild.members.fetch(attackerId).catch(() => null);
           if (attacker && attacker.kickable) {
             await attacker.kick('Tampering with Franco’s role');
-            logSuspiciousAction(newGuild, `**Role Tampering**: <@${attackerId}> tried to remove Franco's admin, got kicked.`);
+            logSuspiciousAction(newGuild, `**Role Tampering**: <@${attackerId}> tried to remove Franco's admin, was kicked.`);
           }
         }
       }
@@ -311,28 +310,22 @@ async function handleGuildJoin(guild, client) {
 async function handleApproveReject(interaction) {
   if (interaction.customId !== 'approve_guild' && interaction.customId !== 'reject_guild') return;
   const embed = interaction.message.embeds[0];
-  if (!embed) {
-    return interaction.reply({
-      content: 'No embed found.',
-      flags: MessageFlags.Ephemeral
-    });
-  }
+  // We'll handle auto deletion below
+  await interaction.deferUpdate().catch(() => null);
+
+  setTimeout(() => {
+    interaction.message.delete().catch(() => null);
+  }, 1000);
+
+  if (!embed) return;
+
   const desc = embed.description || '';
   const match = desc.match(/\*\*(.+)\*\*/);
-  if (!match) {
-    return interaction.reply({
-      content: 'No guild name found in embed.',
-      flags: MessageFlags.Ephemeral
-    });
-  }
+  if (!match) return;
+
   const guildName = match[1];
   const guild = interaction.client.guilds.cache.find(g => g.name === guildName);
-  if (!guild) {
-    return interaction.reply({
-      content: 'Guild not found in cache.',
-      flags: MessageFlags.Ephemeral
-    });
-  }
+  if (!guild) return;
 
   if (interaction.customId === 'approve_guild') {
     approveGuild(guild.id);
@@ -361,17 +354,14 @@ async function handleApproveReject(interaction) {
       }
     }
 
-    // Also show Ghost Franco invite link:
-    await interaction.reply({
-      content: `✅ Approved **${guild.name}**.\nCreated #${channelName} if it didn’t exist.\n\n**Click here to invite Ghost Franco**:\n${GHOST_FRANCO_INVITE}`,
-      flags: MessageFlags.Ephemeral
-    });
+    // Normally you'd reply ephemeral or something,
+    // but we are deferring + auto-deleting the message from DM
+    // so no extra "approve" text is necessary here.
+
   } else {
-    await interaction.reply({
-      content: `❌ Rejected. Leaving **${guild.name}**...`,
-      flags: MessageFlags.Ephemeral
-    });
+    // Reject
     rejectGuild(guild);
+    // likewise, no ephemeral reply since we're deferring + auto-deleting
   }
 }
 
@@ -597,24 +587,20 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-/* 
-   On member add => 
-   - If it's a Franco bot => auto-whitelist
-   - Else => do the normal trust + quarantine
-*/
+// On member add => auto-whitelist Franco bots, else normal user handling
 client.on(Events.GuildMemberAdd, async member => {
   const gid = member.guild.id;
   const uid = member.id;
-
   if (!isGuildApproved(gid)) return;
 
+  // If it's a Franco bot => auto-whitelist
   if (member.user.bot && FRANCO_BOTS.includes(uid)) {
     addToWhitelist(gid, uid);
     console.log(`✅ Auto-whitelisted ${member.user.username} in ${member.guild.name}`);
     return;
   }
 
-  // Normal user handling
+  // Normal user logic
   getTrustObj(gid, uid);
   quarantineCheck(member);
 });
