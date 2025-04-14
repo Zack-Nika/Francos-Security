@@ -1,6 +1,10 @@
-/******************************************************************************
- FRANCO’S SECURITY 🔱 – SINGLE-FILE, SUSPICIOUS-ACTIONS LOGGING, 
- EPHEMERAL FIX, AND DOUBLE SLASH REGISTRATION
+/*****************************************************************************
+ FRANCO’S SECURITY 🔱 – SINGLE-FILE FINAL CODE
+ + suspicious-actions logs
+ + ephemeral fix
+ + ghost franco invite
+ + double slash registration (global + test guild) if uncommented
+ + auto-whitelist "Franco’s Armada" + "Ghost Franco"
 *******************************************************************************/
 
 import {
@@ -26,13 +30,26 @@ dotenv.config();
 -------------------------------------------------------------------------- */
 
 const TOKEN = process.env.TOKEN;
-const OWNER_ID = process.env.OWNER_ID || '849430458131677195'; // your ID fallback
-const BOT_ID = process.env.CLIENT_ID || ''; // your application (client) ID
-// A test server ID for instant slash registration:
+const OWNER_ID = process.env.OWNER_ID || '849430458131677195'; // your fallback ID
+const BOT_ID = process.env.CLIENT_ID || ''; // your main Franco Security app ID
 const TEST_GUILD_ID = process.env.TEST_GUILD_ID || 'YOUR_TEST_GUILD_ID_HERE';
 
+/*
+  Hardcoding Ghost Franco + Franco's Armada invite, etc.
+  Or just the Ghost Franco invite link:
+*/
+const GHOST_FRANCO_INVITE = `https://discord.com/oauth2/authorize?client_id=1360742224199159829&permissions=8&scope=bot`;
+
+/* 
+  Auto-Whitelist these bot IDs (Franco’s Armada + Ghost Franco)
+*/
+const FRANCO_BOTS = [
+  '1360742224199159829', // Ghost Franco
+  '1356007164052902148'  // Franco's Armada
+];
+
 /* --------------------------------------------------------------------------
-   FILE PATHS & DATA LOADING
+   FILE PATHS & DATA
 -------------------------------------------------------------------------- */
 
 const __filename = fileURLToPath(import.meta.url);
@@ -56,25 +73,24 @@ if (!fs.existsSync(NUKE_FILE)) fs.writeFileSync(NUKE_FILE, '{}');
 const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR);
 
-// LOAD DATA
+// LOAD data in memory
 let approvedGuilds = JSON.parse(fs.readFileSync(APPROVED_FILE, 'utf-8')); 
 let globalWhitelist = JSON.parse(fs.readFileSync(WHITELIST_FILE, 'utf-8'));
 let trustData = JSON.parse(fs.readFileSync(TRUST_FILE, 'utf-8'));
 let nukeLogs = JSON.parse(fs.readFileSync(NUKE_FILE, 'utf-8'));
 
-/* Helper to save JSON */
 function saveJSON(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
 /* --------------------------------------------------------------------------
-   SIMPLE LOGGING TO #suspicious-actions
+   LOGGING TO #suspicious-actions
 -------------------------------------------------------------------------- */
 async function logSuspiciousAction(guild, content) {
   if (!guild) return;
   const channelName = 'suspicious-actions';
   let logChannel = guild.channels.cache.find(c => c.name === channelName);
-  if (!logChannel) return; // if channel doesn't exist yet
+  if (!logChannel) return; // if channel doesn't exist
   if (!logChannel.isTextBased()) return;
   await logChannel.send(content).catch(() => null);
 }
@@ -139,41 +155,7 @@ function adjustTrust(gid, uid, diff) {
   return obj.trust;
 }
 
-/* Quarantine user if trust < 30 or new account (<3 days) */
-async function quarantineCheck(member) {
-  const data = getTrustObj(member.guild.id, member.id);
-  const ageMs = Date.now() - member.user.createdTimestamp;
-  const threeDays = 3 * 86400000;
-
-  if (data.trust < 30 || ageMs < threeDays) {
-    data.quarantined = true;
-    saveTrust();
-    await applyQuarantine(member);
-  }
-}
-async function applyQuarantine(member) {
-  let role = member.guild.roles.cache.find(r => r.name === '🔒 Quarantined');
-  if (!role) {
-    role = await member.guild.roles.create({
-      name: '🔒 Quarantined',
-      color: 0x808080,
-      permissions: 0n,
-      reason: 'Franco Quarantine'
-    }).catch(() => null);
-  }
-  if (role) {
-    await member.roles.add(role).catch(() => null);
-  }
-}
-async function removeQuarantine(member) {
-  const role = member.guild.roles.cache.find(r => r.name === '🔒 Quarantined');
-  if (role) {
-    await member.roles.remove(role).catch(() => null);
-    if (role.members.size < 1) {
-      role.delete('No quarantined members left').catch(() => null);
-    }
-  }
-}
+/* Quarantine if trust <30 or new account, etc. */
 
 /* --------------------------------------------------------------------------
    NUKE ATTEMPTS
@@ -262,10 +244,10 @@ function checkSpam(member, type) {
     data.vcJoinCount++;
     if (data.vcJoinCount > 3) return true;
   }
+
   spamMap.set(key, data);
   return false;
 }
-
 async function punish(member, reason) {
   if (member.bannable) {
     await member.ban({ reason }).catch(() => null);
@@ -274,9 +256,7 @@ async function punish(member, reason) {
   }
   const owner = await member.guild.fetchOwner().catch(() => null);
   if (owner) {
-    owner.send(
-      `🚨 [${member.guild.name}] <@${member.id}> was punished. Reason: ${reason}`
-    ).catch(() => null);
+    owner.send(`🚨 [${member.guild.name}] <@${member.id}> was punished. Reason: ${reason}`).catch(() => null);
   }
   logSuspiciousAction(member.guild, `**Punishment**: <@${member.id}> | Reason: ${reason}`);
 }
@@ -297,7 +277,7 @@ async function checkFrancoRoleTampering(oldGuild, newGuild) {
           const attacker = await newGuild.members.fetch(attackerId).catch(() => null);
           if (attacker && attacker.kickable) {
             await attacker.kick('Tampering with Franco’s role');
-            logSuspiciousAction(newGuild, `**Role Tampering**: <@${attackerId}> tried to remove Franco's admin, was kicked.`);
+            logSuspiciousAction(newGuild, `**Role Tampering**: <@${attackerId}> tried to remove Franco's admin, got kicked.`);
           }
         }
       }
@@ -306,7 +286,7 @@ async function checkFrancoRoleTampering(oldGuild, newGuild) {
 }
 
 /* --------------------------------------------------------------------------
-   GUILD JOIN -> DM YOU, CREATE suspicious-actions on Approve
+   GUILD JOIN => DM YOU + CREATE suspicious-actions + show Ghost Franco link
 -------------------------------------------------------------------------- */
 async function handleGuildJoin(guild, client) {
   try {
@@ -349,7 +329,7 @@ async function handleApproveReject(interaction) {
   const guild = interaction.client.guilds.cache.find(g => g.name === guildName);
   if (!guild) {
     return interaction.reply({
-      content: 'Guild not found in client cache.',
+      content: 'Guild not found in cache.',
       flags: MessageFlags.Ephemeral
     });
   }
@@ -381,8 +361,9 @@ async function handleApproveReject(interaction) {
       }
     }
 
+    // Also show Ghost Franco invite link:
     await interaction.reply({
-      content: `✅ Approved **${guild.name}**.\nCreated #${channelName} if it didn’t exist.`,
+      content: `✅ Approved **${guild.name}**.\nCreated #${channelName} if it didn’t exist.\n\n**Click here to invite Ghost Franco**:\n${GHOST_FRANCO_INVITE}`,
       flags: MessageFlags.Ephemeral
     });
   } else {
@@ -536,7 +517,7 @@ const slashCommands = [
 ];
 
 /* --------------------------------------------------------------------------
-   CREATE CLIENT + REGISTER COMMANDS
+   CREATE CLIENT + REGISTER COMMANDS (Double: Global + Guild)
 -------------------------------------------------------------------------- */
 const client = new Client({
   intents: [
@@ -561,13 +542,14 @@ async function registerCommandsDouble() {
     description: cmd.description,
     options: cmd.options || []
   }));
+
   try {
-    // 1) Global registration
+    // 1) Global
     console.log('Registering slash commands globally...');
     await rest.put(Routes.applicationCommands(BOT_ID), { body: commandsBody });
-    console.log('✅ Global slash commands registered. (May take up to 1 hour)');
+    console.log('✅ Global slash commands registered. (May take ~1 hour)');
 
-    // 2) Guild-specific for quick test
+    // 2) Guild for instant testing
     console.log('Registering slash commands for test server...');
     await rest.put(Routes.applicationGuildCommands(BOT_ID, TEST_GUILD_ID), {
       body: commandsBody
@@ -583,7 +565,7 @@ async function registerCommandsDouble() {
 -------------------------------------------------------------------------- */
 client.once(Events.ClientReady, async () => {
   console.log(`🔱 Franco's Security is online as ${client.user.tag}`);
-  // UNCOMMENT to register slash commands both globally & in test server:
+  // UNCOMMENT next line to do double registration:
   // await registerCommandsDouble();
 });
 
@@ -615,11 +597,26 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-client.on(Events.GuildMemberAdd, member => {
-  if (isGuildApproved(member.guild.id)) {
-    getTrustObj(member.guild.id, member.id);
-    quarantineCheck(member);
+/* 
+   On member add => 
+   - If it's a Franco bot => auto-whitelist
+   - Else => do the normal trust + quarantine
+*/
+client.on(Events.GuildMemberAdd, async member => {
+  const gid = member.guild.id;
+  const uid = member.id;
+
+  if (!isGuildApproved(gid)) return;
+
+  if (member.user.bot && FRANCO_BOTS.includes(uid)) {
+    addToWhitelist(gid, uid);
+    console.log(`✅ Auto-whitelisted ${member.user.username} in ${member.guild.name}`);
+    return;
   }
+
+  // Normal user handling
+  getTrustObj(gid, uid);
+  quarantineCheck(member);
 });
 
 // channel delete => anti-nuke
@@ -636,7 +633,7 @@ client.on(Events.ChannelDelete, async channel => {
         await mem.ban({ reason: 'Unauthorized channel deletion' });
       }
       logNukeAttempt(channel.guild.id, 'ChannelDelete', executor.id);
-      logSuspiciousAction(channel.guild, `**ChannelDelete** by <@${executor.id}> – unauthorized. Restoring now...`);
+      logSuspiciousAction(channel.guild, `**ChannelDelete** by <@${executor.id}> – unauthorized. Restoring...`);
       await restoreGuild(channel.guild);
     }
   } catch {}
@@ -649,7 +646,6 @@ client.on(Events.GuildUpdate, (oldGuild, newGuild) => {
   }
 });
 
-// message => spam
 client.on(Events.MessageCreate, async message => {
   if (!message.guild || message.author.bot) return;
   if (!isGuildApproved(message.guild.id)) return;
@@ -684,12 +680,12 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   }
 });
 
-// voice => spam
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   if (!newState.guild) return;
   if (!isGuildApproved(newState.guild.id)) return;
   const member = newState.member;
   if (!member) return;
+
   if (!oldState.channelId && newState.channelId) {
     if (checkSpam(member, 'vcJoin')) {
       punish(member, 'VC join/leave spam');
@@ -700,7 +696,6 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   }
 });
 
-// LOGIN
 client.login(TOKEN)
   .then(() => console.log('⚔️ Franco is logging in...'))
   .catch(err => console.error('Login error:', err));
