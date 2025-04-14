@@ -1,16 +1,14 @@
 {
-  "name": "franco-security-bot",
+  "name": "franco-security",
   "version": "1.0.0",
   "type": "module",
-  "description": "Franco's Security 🔱 - The top-tier Discord security bot",
+  "description": "Franco's single-file security with suspicious-actions logs, ephemeral fix, and double slash reg.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "author": "Franco 🔱",
-  "license": "MIT",
   "dependencies": {
-    "discord.js": "^14.11.0",
+    "discord.js": "^14.13.0",
     "dotenv": "^16.3.1"
   }
 }
