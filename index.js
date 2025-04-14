@@ -1,8 +1,6 @@
 /******************************************************************************
- FRANCO’S SECURITY 🔱 – SINGLE-FILE WITH SUSPICIOUS-ACTIONS + LOGGING
- - On Approve => Creates #suspicious-actions if not exists
- - Logs events (punishments, channel deletes, etc.) to #suspicious-actions
- - Slash commands included (see notes on registration below)
+ FRANCO’S SECURITY 🔱 – SINGLE-FILE, SUSPICIOUS-ACTIONS LOGGING, 
+ EPHEMERAL FIX, AND DOUBLE SLASH REGISTRATION
 *******************************************************************************/
 
 import {
@@ -23,12 +21,20 @@ import { fileURLToPath } from 'url';
 
 dotenv.config();
 
-// BOT CONFIG
-const TOKEN = process.env.TOKEN;
-const OWNER_ID = process.env.OWNER_ID || '849430458131677195';
-const BOT_ID = process.env.CLIENT_ID || '';
+/* --------------------------------------------------------------------------
+   BOT CONFIG
+-------------------------------------------------------------------------- */
 
-// FILE PATHS
+const TOKEN = process.env.TOKEN;
+const OWNER_ID = process.env.OWNER_ID || '849430458131677195'; // your ID fallback
+const BOT_ID = process.env.CLIENT_ID || ''; // your application (client) ID
+// A test server ID for instant slash registration:
+const TEST_GUILD_ID = process.env.TEST_GUILD_ID || 'YOUR_TEST_GUILD_ID_HERE';
+
+/* --------------------------------------------------------------------------
+   FILE PATHS & DATA LOADING
+-------------------------------------------------------------------------- */
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -51,26 +57,31 @@ const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR);
 
 // LOAD DATA
-let approvedGuilds = JSON.parse(fs.readFileSync(APPROVED_FILE, 'utf-8'));  
-let globalWhitelist = JSON.parse(fs.readFileSync(WHITELIST_FILE, 'utf-8')); 
-let trustData = JSON.parse(fs.readFileSync(TRUST_FILE, 'utf-8'));          
-let nukeLogs = JSON.parse(fs.readFileSync(NUKE_FILE, 'utf-8'));           
+let approvedGuilds = JSON.parse(fs.readFileSync(APPROVED_FILE, 'utf-8')); 
+let globalWhitelist = JSON.parse(fs.readFileSync(WHITELIST_FILE, 'utf-8'));
+let trustData = JSON.parse(fs.readFileSync(TRUST_FILE, 'utf-8'));
+let nukeLogs = JSON.parse(fs.readFileSync(NUKE_FILE, 'utf-8'));
 
+/* Helper to save JSON */
 function saveJSON(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-// Logs to #suspicious-actions
+/* --------------------------------------------------------------------------
+   SIMPLE LOGGING TO #suspicious-actions
+-------------------------------------------------------------------------- */
 async function logSuspiciousAction(guild, content) {
   if (!guild) return;
   const channelName = 'suspicious-actions';
   let logChannel = guild.channels.cache.find(c => c.name === channelName);
-  if (!logChannel) return; // if channel doesn’t exist, skip
+  if (!logChannel) return; // if channel doesn't exist yet
   if (!logChannel.isTextBased()) return;
   await logChannel.send(content).catch(() => null);
 }
 
-// APPROVAL
+/* --------------------------------------------------------------------------
+   APPROVAL SYSTEM
+-------------------------------------------------------------------------- */
 function isGuildApproved(gid) {
   return approvedGuilds.includes(gid);
 }
@@ -84,7 +95,9 @@ function rejectGuild(guild) {
   guild.leave();
 }
 
-// WHITELIST
+/* --------------------------------------------------------------------------
+   WHITELIST
+-------------------------------------------------------------------------- */
 function getGuildWhitelist(gid) {
   if (!globalWhitelist[gid]) globalWhitelist[gid] = [];
   return globalWhitelist[gid];
@@ -104,7 +117,9 @@ function removeFromWhitelist(gid, uid) {
   saveJSON(WHITELIST_FILE, globalWhitelist);
 }
 
-// TRUST + QUARANTINE
+/* --------------------------------------------------------------------------
+   TRUST + QUARANTINE
+-------------------------------------------------------------------------- */
 function getTrustObj(gid, uid) {
   if (!trustData[gid]) trustData[gid] = {};
   if (!trustData[gid][uid]) {
@@ -124,6 +139,7 @@ function adjustTrust(gid, uid, diff) {
   return obj.trust;
 }
 
+/* Quarantine user if trust < 30 or new account (<3 days) */
 async function quarantineCheck(member) {
   const data = getTrustObj(member.guild.id, member.id);
   const ageMs = Date.now() - member.user.createdTimestamp;
@@ -159,14 +175,22 @@ async function removeQuarantine(member) {
   }
 }
 
-// NUKE ATTEMPTS
+/* --------------------------------------------------------------------------
+   NUKE ATTEMPTS
+-------------------------------------------------------------------------- */
 function logNukeAttempt(gid, type, attackerId) {
   if (!nukeLogs[gid]) nukeLogs[gid] = [];
-  nukeLogs[gid].push({ type, attacker: attackerId, time: new Date().toLocaleString() });
+  nukeLogs[gid].push({
+    type,
+    attacker: attackerId,
+    time: new Date().toLocaleString()
+  });
   saveJSON(NUKE_FILE, nukeLogs);
 }
 
-// BACKUP & RESTORE
+/* --------------------------------------------------------------------------
+   BACKUP & RESTORE
+-------------------------------------------------------------------------- */
 function backupGuild(guild) {
   const data = { channels: [], roles: [] };
   guild.channels.cache.forEach(ch => {
@@ -209,7 +233,9 @@ async function restoreGuild(guild) {
   return true;
 }
 
-// SPAM / SELF-BOT
+/* --------------------------------------------------------------------------
+   SPAM / SELF-BOT DETECTION
+-------------------------------------------------------------------------- */
 const spamMap = new Map();
 function checkSpam(member, type) {
   if (
@@ -239,6 +265,7 @@ function checkSpam(member, type) {
   spamMap.set(key, data);
   return false;
 }
+
 async function punish(member, reason) {
   if (member.bannable) {
     await member.ban({ reason }).catch(() => null);
@@ -247,13 +274,16 @@ async function punish(member, reason) {
   }
   const owner = await member.guild.fetchOwner().catch(() => null);
   if (owner) {
-    owner.send(`🚨 [${member.guild.name}] <@${member.id}> was punished. Reason: ${reason}`).catch(() => null);
+    owner.send(
+      `🚨 [${member.guild.name}] <@${member.id}> was punished. Reason: ${reason}`
+    ).catch(() => null);
   }
-  // also log to #suspicious-actions
   logSuspiciousAction(member.guild, `**Punishment**: <@${member.id}> | Reason: ${reason}`);
 }
 
-// ROLE TAMPERING
+/* --------------------------------------------------------------------------
+   ROLE TAMPERING
+-------------------------------------------------------------------------- */
 async function checkFrancoRoleTampering(oldGuild, newGuild) {
   const me = await newGuild.members.fetchMe().catch(() => null);
   if (!me) return;
@@ -267,7 +297,7 @@ async function checkFrancoRoleTampering(oldGuild, newGuild) {
           const attacker = await newGuild.members.fetch(attackerId).catch(() => null);
           if (attacker && attacker.kickable) {
             await attacker.kick('Tampering with Franco’s role');
-            logSuspiciousAction(newGuild, `**Role Tampering**: <@${attackerId}> tried to remove Franco's admin.`);
+            logSuspiciousAction(newGuild, `**Role Tampering**: <@${attackerId}> tried to remove Franco's admin, was kicked.`);
           }
         }
       }
@@ -275,7 +305,9 @@ async function checkFrancoRoleTampering(oldGuild, newGuild) {
   }
 }
 
-// GUILD JOIN => DM YOU + CREATE suspicious-actions on approve
+/* --------------------------------------------------------------------------
+   GUILD JOIN -> DM YOU, CREATE suspicious-actions on Approve
+-------------------------------------------------------------------------- */
 async function handleGuildJoin(guild, client) {
   try {
     const you = await client.users.fetch(OWNER_ID);
@@ -295,6 +327,7 @@ async function handleGuildJoin(guild, client) {
     await you.send({ embeds: [embed], components: [row] });
   } catch {}
 }
+
 async function handleApproveReject(interaction) {
   if (interaction.customId !== 'approve_guild' && interaction.customId !== 'reject_guild') return;
   const embed = interaction.message.embeds[0];
@@ -316,7 +349,7 @@ async function handleApproveReject(interaction) {
   const guild = interaction.client.guilds.cache.find(g => g.name === guildName);
   if (!guild) {
     return interaction.reply({
-      content: 'Guild not found in cache.',
+      content: 'Guild not found in client cache.',
       flags: MessageFlags.Ephemeral
     });
   }
@@ -324,7 +357,7 @@ async function handleApproveReject(interaction) {
   if (interaction.customId === 'approve_guild') {
     approveGuild(guild.id);
 
-    // ★ CREATE #suspicious-actions IF NOT EXISTS
+    // Create suspicious-actions if missing
     const channelName = 'suspicious-actions';
     let logChan = guild.channels.cache.find(c => c.name === channelName);
     if (!logChan) {
@@ -349,7 +382,7 @@ async function handleApproveReject(interaction) {
     }
 
     await interaction.reply({
-      content: `✅ Approved **${guild.name}**. \nCreated #${channelName} if it didn’t exist.`,
+      content: `✅ Approved **${guild.name}**.\nCreated #${channelName} if it didn’t exist.`,
       flags: MessageFlags.Ephemeral
     });
   } else {
@@ -361,7 +394,9 @@ async function handleApproveReject(interaction) {
   }
 }
 
-/* SLASH COMMANDS (with ephemeral replaced by flags) */
+/* --------------------------------------------------------------------------
+   SLASH COMMANDS
+-------------------------------------------------------------------------- */
 const slashCommands = [
   {
     name: 'whitelist',
@@ -402,7 +437,7 @@ const slashCommands = [
         content: '✅ Backup done.',
         flags: MessageFlags.Ephemeral
       });
-      logSuspiciousAction(interaction.guild, '**Backup**: Triggered by <@' + interaction.user.id + '>');
+      logSuspiciousAction(interaction.guild, `**Backup** triggered by <@${interaction.user.id}>`);
     }
   },
   {
@@ -416,7 +451,7 @@ const slashCommands = [
           content: '✅ Server restored.',
           flags: MessageFlags.Ephemeral
         });
-        logSuspiciousAction(interaction.guild, '**Restore**: Triggered by <@' + interaction.user.id + '>');
+        logSuspiciousAction(interaction.guild, `**Restore** triggered by <@${interaction.user.id}>`);
       } else {
         await interaction.followUp({
           content: '❌ No backup found.',
@@ -495,12 +530,14 @@ const slashCommands = [
           flags: MessageFlags.Ephemeral
         });
       }
-      logSuspiciousAction(interaction.guild, '**Defcon** set to ' + level + ' by <@' + interaction.user.id + '>');
+      logSuspiciousAction(interaction.guild, `**Defcon** set to ${level} by <@${interaction.user.id}>`);
     }
   }
 ];
 
-// CLIENT
+/* --------------------------------------------------------------------------
+   CREATE CLIENT + REGISTER COMMANDS
+-------------------------------------------------------------------------- */
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -513,31 +550,41 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember]
 });
 
-async function registerCommands() {
+async function registerCommandsDouble() {
   if (!BOT_ID) {
     console.log('No CLIENT_ID set, skipping slash auto-registration.');
     return;
   }
   const rest = new REST({ version: '10' }).setToken(TOKEN);
+  const commandsBody = slashCommands.map(cmd => ({
+    name: cmd.name,
+    description: cmd.description,
+    options: cmd.options || []
+  }));
   try {
+    // 1) Global registration
     console.log('Registering slash commands globally...');
-    await rest.put(Routes.applicationCommands(BOT_ID), {
-      body: slashCommands.map(cmd => ({
-        name: cmd.name,
-        description: cmd.description,
-        options: cmd.options || []
-      }))
+    await rest.put(Routes.applicationCommands(BOT_ID), { body: commandsBody });
+    console.log('✅ Global slash commands registered. (May take up to 1 hour)');
+
+    // 2) Guild-specific for quick test
+    console.log('Registering slash commands for test server...');
+    await rest.put(Routes.applicationGuildCommands(BOT_ID, TEST_GUILD_ID), {
+      body: commandsBody
     });
-    console.log('✅ Slash commands registered globally.');
+    console.log(`✅ Guild slash commands registered instantly for GUILD_ID = ${TEST_GUILD_ID}`);
   } catch (err) {
     console.error('Failed slash registration:', err);
   }
 }
 
+/* --------------------------------------------------------------------------
+   MAIN
+-------------------------------------------------------------------------- */
 client.once(Events.ClientReady, async () => {
   console.log(`🔱 Franco's Security is online as ${client.user.tag}`);
-  // If you want slash auto-reg, uncomment:
-  // await registerCommands();
+  // UNCOMMENT to register slash commands both globally & in test server:
+  // await registerCommandsDouble();
 });
 
 client.on(Events.GuildCreate, guild => {
@@ -575,11 +622,11 @@ client.on(Events.GuildMemberAdd, member => {
   }
 });
 
-// channel delete => nuke
+// channel delete => anti-nuke
 client.on(Events.ChannelDelete, async channel => {
   if (!isGuildApproved(channel.guild.id)) return;
   try {
-    const logs = await channel.guild.fetchAuditLogs({ limit: 1, type: 12 }); // channeldelete
+    const logs = await channel.guild.fetchAuditLogs({ limit: 1, type: 12 });
     const entry = logs.entries.first();
     if (!entry) return;
     const executor = entry.executor;
@@ -589,21 +636,24 @@ client.on(Events.ChannelDelete, async channel => {
         await mem.ban({ reason: 'Unauthorized channel deletion' });
       }
       logNukeAttempt(channel.guild.id, 'ChannelDelete', executor.id);
-      logSuspiciousAction(channel.guild, `**ChannelDelete** by <@${executor.id}> – unauthorized. Restoring...`);
+      logSuspiciousAction(channel.guild, `**ChannelDelete** by <@${executor.id}> – unauthorized. Restoring now...`);
       await restoreGuild(channel.guild);
     }
   } catch {}
 });
 
+// guild update => role tampering
 client.on(Events.GuildUpdate, (oldGuild, newGuild) => {
   if (isGuildApproved(newGuild.id)) {
     checkFrancoRoleTampering(oldGuild, newGuild);
   }
 });
 
+// message => spam
 client.on(Events.MessageCreate, async message => {
   if (!message.guild || message.author.bot) return;
   if (!isGuildApproved(message.guild.id)) return;
+
   const member = message.member;
   if (checkSpam(member, 'message')) {
     await punish(member, 'Spam / selfbot suspicion');
@@ -617,9 +667,7 @@ client.on(Events.MessageCreate, async message => {
   }
   const tObj = getTrustObj(message.guild.id, member.id);
   if (!tObj.quarantined) adjustTrust(message.guild.id, member.id, +1);
-  if (tObj.quarantined) {
-    message.delete().catch(() => null);
-  }
+  if (tObj.quarantined) message.delete().catch(() => null);
 });
 
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
@@ -636,6 +684,7 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   }
 });
 
+// voice => spam
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   if (!newState.guild) return;
   if (!isGuildApproved(newState.guild.id)) return;
@@ -651,6 +700,7 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   }
 });
 
+// LOGIN
 client.login(TOKEN)
   .then(() => console.log('⚔️ Franco is logging in...'))
   .catch(err => console.error('Login error:', err));
